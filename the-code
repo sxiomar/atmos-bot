@@ -1,0 +1,164 @@
+// This code should heat, humidify and ventilate
+// the grow room at regular, frequent intervals
+// that won't break the plugged in devices.  It
+// should also save the all sensor data to an SD
+// card with the appropriate time and date.  
+// Finally, it should run a small display if there
+// is enough electricity left.
+
+#include <SD.h>     // These are the libraries that contain specific comands for the SD card shield,
+#include <SPI.h>
+#include "DHT.h"    // The DHT (digital umidity and temperature
+#include <Wire.h>   // This is the I2C library that the RTC(real time clock) uses.  Multiple devices 
+#include "RTClib.h" // can use the same I2C ports because each device has a name and is master and slave.
+
+char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}; 
+File atmpt3;      // describes "atmpt3" as a file (I think). This may need to be changed if there are more than one file.
+RTC_DS1307 rtc;   // This will save the time of typing "RTC_DS1307"
+
+#define DHTPIN 2  // This can be changed depending on where I want the DHT data to go
+#define DHTTYPE DHT22   // Necessary for the DHT library to work
+DHT dht(DHTPIN, DHTTYPE); // bring the last 2 lines together
+const int chipSelect = 10; // This is the port that the SD shield has to use.
+
+//const int relayPin1 = 5; // ventilate
+//const int relayPin2 = 6; // humidify
+//const int relayPin3 = 7; // heat
+//const int relayPin4 = 8; // co2
+
+const int numHReadings = 40; // The following lines are to create a running average for the temperture and humidity readings.
+int Hreadings[numHReadings]; // This is done by creating a list of numXReadings and adding each reading to that list.  Once 40
+int readHIndex = 0;           // is reached the index is reset to zero so the oldest reading are written over.
+int Htotal = 0;
+int Haverage= 0;
+
+const int numTReadings = 40;
+int Treadings[numTReadings];
+int readTIndex= 0;
+int Ttotal = 0;
+int Taverage = 0;
+
+void setup() {
+  Serial.begin(9600);   // To talk to the computer
+  if (! rtc.begin()){   // I have no idea why the "while" statemnt is there but this tells if no rtc
+    Serial.println("No RTC");
+    while (1);
+  }
+  if (! rtc.isrunning()){   // uses special rtc lib. commands to check it the rtc is running
+    Serial.println("RTC isn't working");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));  // sets the time
+  }
+  pinMode(5, OUTPUT);   //vent  these are for the outlets that I will wire (up to 10A A/C)
+  pinMode(6, OUTPUT);   //humidify
+  pinMode(7, OUTPUT);   //heat
+  pinMode(8, OUTPUT);   //xtra
+  dht.begin();
+  Serial.print("Initializing SD card . . .");
+  pinMode(10,OUTPUT);
+  if (!SD.begin(chipSelect)){
+    //check if the SD card is present and connected properly.
+    Serial.println("Card failed or not present");
+    return;
+  }
+  Serial.println("Card initialized");
+  for (int thisTReading = 0; thisTReading < numTReadings; thisTReading++) {
+    // the following two for statments fill the lists with values of zero and usable indexes
+    Treadings[thisTReading] = 0;
+  }
+  for (int thisHReading = 0; thisHReading < numHReadings; thisHReading++) {
+    Hreadings[thisHReading] = 0;
+  }
+  
+  Serial.println("Hello"); // Checks that set-up is complete
+}
+
+
+void loop() {
+  delay(2000); // delay 6 second, expect this to get longer because thats 10 readings per minutes.
+               // I don't want my vent fan to turn on and off this quickly
+  
+  Ttotal = Ttotal - Treadings[readTIndex];
+  Htotal = Htotal - Hreadings[readHIndex];
+  Serial.print("Test 1, minus the reading that's coming from total   ");
+  Serial.print(Ttotal);
+  Serial.print("   ");
+  Serial.println(Htotal);
+
+  float currentTemp = dht.readTemperature(true);
+  float currentHumi = dht.readHumidity();
+  Serial.print("Test 2, current readings   ");
+  Serial.print(currentTemp);
+  Serial.print("   ");
+  Serial.println(currentHumi);
+  
+  Treadings[readTIndex] = currentTemp;  
+  Hreadings[readHIndex] = currentHumi;
+  Serial.print("Test 3, lists   ");
+  Serial.print(Treadings[readTIndex]);
+  Serial.print("   ");
+  Serial.println(Hreadings[readHIndex]);
+  
+  Ttotal = Ttotal + Treadings[readTIndex];
+  Htotal = Htotal + Hreadings[readHIndex];
+  Serial.print("Test 4, new totals   ");
+  Serial.print(Ttotal);
+  Serial.print("   ");
+  Serial.println(Htotal);
+  
+  readTIndex = readTIndex + 1;
+  readHIndex = readHIndex + 1;
+  Serial.print("Test 5, new index   ");
+  Serial.print(readTIndex);
+  Serial.print("   ");
+  Serial.println(readHIndex);
+  
+  if (readTIndex == numTReadings){
+    // This ensures that the index values don't rise above the number
+    // of items in the list and begins wrining over the oldest readings
+    readTIndex = 0;       
+  }
+  if (readHIndex == numHReadings){
+    readHIndex = 0;
+  Serial.print("Test 6*, index restart   ");
+  Serial.print(readTIndex);
+  Serial.print("   ");
+  Serial.println(readHIndex);          
+  }
+  Taverage = Ttotal / numTReadings;
+  Haverage = Htotal / numHReadings;
+  Serial.print("Test 7, avges   ");
+  Serial.print(Taverage);
+  Serial.print("   ");
+  Serial.println(Haverage);
+  
+  if (Taverage>79 or Haverage>60){
+    // Turn on the ventilation fan if the temp or humidity is too high
+    digitalWrite(5,HIGH);
+  }
+  if (Haverage<50){
+    // Turn on the humidifier (it's actually great for veg. growth)
+    digitalWrite(6,HIGH);
+  }
+  if (Taverage<73){
+    // Turn on the heater.  I want this for controlling the day/night temperature difference 
+    // which I've read is beneficial for root growth.
+    digitalWrite(7,HIGH);
+  }
+  //DateTime now = rtc.now(); // this is something for the RTC that I don't understand
+  atmpt3 = SD.open("atmpt3.txt", FILE_WRITE);
+  // if the file is available, write to it:
+//  if (atmpt3) {
+//    Serial.println("SD file is open");
+//    atmpt3.println();
+//    atmpt3.print("Temp:");
+//    atmpt3.print(Taverage, DEC);
+//    atmpt3.print("    Humidity:");
+//    atmpt3.print(Haverage, DEC);
+//    atmpt3.print("    ");
+//    atmpt3.println();
+//    atmpt3.close();
+//  }
+  // if the file isn't open, pop up an error:
+//  else {
+//    Serial.println("error opening datalog.txt");
+  }
